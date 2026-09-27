@@ -1111,6 +1111,142 @@ static void L3_dct3_9(float *y)
     y[8] = s4 + s7;
 }
 
+#if defined(__AVX2__) && HAVE_SIMD
+static __inline__ __attribute__((always_inline)) void minimp3_transpose8_ps(__m256 *r)
+{
+    __m256 t0 = _mm256_unpacklo_ps(r[0], r[1]);
+    __m256 t1 = _mm256_unpackhi_ps(r[0], r[1]);
+    __m256 t2 = _mm256_unpacklo_ps(r[2], r[3]);
+    __m256 t3 = _mm256_unpackhi_ps(r[2], r[3]);
+    __m256 t4 = _mm256_unpacklo_ps(r[4], r[5]);
+    __m256 t5 = _mm256_unpackhi_ps(r[4], r[5]);
+    __m256 t6 = _mm256_unpacklo_ps(r[6], r[7]);
+    __m256 t7 = _mm256_unpackhi_ps(r[6], r[7]);
+    __m256 s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+    __m256 s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+    __m256 s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+    __m256 s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+    __m256 s4 = _mm256_shuffle_ps(t4, t6, 0x44);
+    __m256 s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+    __m256 s6 = _mm256_shuffle_ps(t5, t7, 0x44);
+    __m256 s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+    r[0] = _mm256_permute2f128_ps(s0, s4, 0x20);
+    r[1] = _mm256_permute2f128_ps(s1, s5, 0x20);
+    r[2] = _mm256_permute2f128_ps(s2, s6, 0x20);
+    r[3] = _mm256_permute2f128_ps(s3, s7, 0x20);
+    r[4] = _mm256_permute2f128_ps(s0, s4, 0x31);
+    r[5] = _mm256_permute2f128_ps(s1, s5, 0x31);
+    r[6] = _mm256_permute2f128_ps(s2, s6, 0x31);
+    r[7] = _mm256_permute2f128_ps(s3, s7, 0x31);
+}
+
+static __inline__ __attribute__((always_inline)) void L3_dct3_9_avx2(__m256 *y)
+{
+    __m256 s0, s1, s2, s3, s4, s5, s6, s7, s8, t0, t2, t4;
+    s0 = y[0]; s2 = y[2]; s4 = y[4]; s6 = y[6]; s8 = y[8];
+    t0 = _mm256_add_ps(s0, _mm256_mul_ps(s6, _mm256_set1_ps(0.5f)));
+    s0 = _mm256_sub_ps(s0, s6);
+    t4 = _mm256_mul_ps(_mm256_add_ps(s4, s2), _mm256_set1_ps(0.93969262f));
+    t2 = _mm256_mul_ps(_mm256_add_ps(s8, s2), _mm256_set1_ps(0.76604444f));
+    s6 = _mm256_mul_ps(_mm256_sub_ps(s4, s8), _mm256_set1_ps(0.17364818f));
+    s4 = _mm256_add_ps(s4, _mm256_sub_ps(s8, s2));
+
+    s2 = _mm256_sub_ps(s0, _mm256_mul_ps(s4, _mm256_set1_ps(0.5f)));
+    y[4] = _mm256_add_ps(s4, s0);
+    s8 = _mm256_add_ps(_mm256_sub_ps(t0, t2), s6);
+    s0 = _mm256_add_ps(_mm256_sub_ps(t0, t4), t2);
+    s4 = _mm256_sub_ps(_mm256_add_ps(t0, t4), s6);
+
+    s1 = y[1]; s3 = y[3]; s5 = y[5]; s7 = y[7];
+    s3 = _mm256_mul_ps(s3, _mm256_set1_ps(0.86602540f));
+    t0 = _mm256_mul_ps(_mm256_add_ps(s5, s1), _mm256_set1_ps(0.98480775f));
+    t4 = _mm256_mul_ps(_mm256_sub_ps(s5, s7), _mm256_set1_ps(0.34202014f));
+    t2 = _mm256_mul_ps(_mm256_add_ps(s1, s7), _mm256_set1_ps(0.64278761f));
+    s1 = _mm256_mul_ps(_mm256_sub_ps(_mm256_sub_ps(s1, s5), s7), _mm256_set1_ps(0.86602540f));
+
+    s5 = _mm256_sub_ps(_mm256_sub_ps(t0, s3), t2);
+    s7 = _mm256_sub_ps(_mm256_sub_ps(t4, s3), t0);
+    s3 = _mm256_sub_ps(_mm256_add_ps(t4, s3), t2);
+
+    y[0] = _mm256_sub_ps(s4, s7);
+    y[1] = _mm256_add_ps(s2, s1);
+    y[2] = _mm256_sub_ps(s0, s3);
+    y[3] = _mm256_add_ps(s8, s5);
+    y[5] = _mm256_sub_ps(s8, s5);
+    y[6] = _mm256_add_ps(s0, s3);
+    y[7] = _mm256_sub_ps(s2, s1);
+    y[8] = _mm256_add_ps(s4, s7);
+}
+
+/* Full 36-point IMDCT for a group of 8 bands, SoA across bands.
+ * Lane j corresponds to band j; results are bit-identical to the scalar path. */
+static void L3_imdct36x8(float *grbuf, float *overlap, const float *window, const float *tw)
+{
+    __m256 G[18], C[9], S[9], OV[9], OUT[18], R[8];
+    const __m256 sign = _mm256_set1_ps(-0.0f);
+    float t8[8];
+    int q, i;
+
+    for (q = 0; q < 8; q++) R[q] = _mm256_loadu_ps(grbuf + 18*q);
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) G[q] = R[q];
+    for (q = 0; q < 8; q++) R[q] = _mm256_loadu_ps(grbuf + 18*q + 8);
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) G[q + 8] = R[q];
+    G[16] = _mm256_setr_ps(grbuf[16], grbuf[34], grbuf[52], grbuf[70], grbuf[88], grbuf[106], grbuf[124], grbuf[142]);
+    G[17] = _mm256_setr_ps(grbuf[17], grbuf[35], grbuf[53], grbuf[71], grbuf[89], grbuf[107], grbuf[125], grbuf[143]);
+
+    for (q = 0; q < 8; q++) R[q] = _mm256_loadu_ps(overlap + 9*q);
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) OV[q] = R[q];
+    OV[8] = _mm256_setr_ps(overlap[8], overlap[17], overlap[26], overlap[35], overlap[44], overlap[53], overlap[62], overlap[71]);
+
+    C[0] = _mm256_xor_ps(G[0], sign);
+    S[0] = G[17];
+    for (i = 0; i < 4; i++)
+    {
+        S[8 - 2*i] = _mm256_sub_ps(G[4*i + 1], G[4*i + 2]);
+        C[1 + 2*i] = _mm256_add_ps(G[4*i + 1], G[4*i + 2]);
+        S[7 - 2*i] = _mm256_sub_ps(G[4*i + 4], G[4*i + 3]);
+        C[2 + 2*i] = _mm256_xor_ps(_mm256_add_ps(G[4*i + 3], G[4*i + 4]), sign);
+    }
+    L3_dct3_9_avx2(C);
+    L3_dct3_9_avx2(S);
+    S[1] = _mm256_xor_ps(S[1], sign);
+    S[3] = _mm256_xor_ps(S[3], sign);
+    S[5] = _mm256_xor_ps(S[5], sign);
+    S[7] = _mm256_xor_ps(S[7], sign);
+
+    for (i = 0; i < 9; i++)
+    {
+        __m256 ovl = OV[i];
+        __m256 tw0 = _mm256_set1_ps(tw[i]),     tw1 = _mm256_set1_ps(tw[9 + i]);
+        __m256 w0  = _mm256_set1_ps(window[i]), w1  = _mm256_set1_ps(window[9 + i]);
+        __m256 sum = _mm256_add_ps(_mm256_mul_ps(C[i], tw1), _mm256_mul_ps(S[i], tw0));
+        OV[i] = _mm256_sub_ps(_mm256_mul_ps(C[i], tw0), _mm256_mul_ps(S[i], tw1));
+        OUT[i]      = _mm256_sub_ps(_mm256_mul_ps(ovl, w0), _mm256_mul_ps(sum, w1));
+        OUT[17 - i] = _mm256_add_ps(_mm256_mul_ps(ovl, w1), _mm256_mul_ps(sum, w0));
+    }
+
+    for (q = 0; q < 8; q++) R[q] = OUT[q];
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) _mm256_storeu_ps(grbuf + 18*q, R[q]);
+    for (q = 0; q < 8; q++) R[q] = OUT[q + 8];
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) _mm256_storeu_ps(grbuf + 18*q + 8, R[q]);
+    _mm256_storeu_ps(t8, OUT[16]);
+    for (q = 0; q < 8; q++) grbuf[18*q + 16] = t8[q];
+    _mm256_storeu_ps(t8, OUT[17]);
+    for (q = 0; q < 8; q++) grbuf[18*q + 17] = t8[q];
+
+    for (q = 0; q < 8; q++) R[q] = OV[q];
+    minimp3_transpose8_ps(R);
+    for (q = 0; q < 8; q++) _mm256_storeu_ps(overlap + 9*q, R[q]);
+    _mm256_storeu_ps(t8, OV[8]);
+    for (q = 0; q < 8; q++) overlap[9*q + 8] = t8[q];
+}
+#endif /* __AVX2__ && HAVE_SIMD */
+
 static void L3_imdct36(float *grbuf, float *overlap, const float *window, int nbands)
 {
     int i, j;
@@ -1118,7 +1254,20 @@ static void L3_imdct36(float *grbuf, float *overlap, const float *window, int nb
         0.73727734f,0.79335334f,0.84339145f,0.88701083f,0.92387953f,0.95371695f,0.97629601f,0.99144486f,0.99904822f,0.67559021f,0.60876143f,0.53729961f,0.46174861f,0.38268343f,0.30070580f,0.21643961f,0.13052619f,0.04361938f
     };
 
-    for (j = 0; j < nbands; j++, grbuf += 18, overlap += 9)
+#if defined(__AVX2__) && HAVE_SIMD
+    if (have_simd())
+    {
+        for (j = 0; j + 8 <= nbands; j += 8, grbuf += 8*18, overlap += 8*9)
+            L3_imdct36x8(grbuf, overlap, window, g_twid9);
+    } else
+    {
+        j = 0;
+    }
+#else
+    j = 0;
+#endif
+
+    for (; j < nbands; j++, grbuf += 18, overlap += 9)
     {
         float co[9], si[9];
         co[0] = -grbuf[0];
