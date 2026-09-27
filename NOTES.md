@@ -5,29 +5,39 @@ gcc 13.3 only (no clang/perf/llvm-mca, no sudo).
 
 Strategy was compiler-first: establish a bit-exact differential + conformance
 harness, exhaust the compiler/PGO headroom, profile, then spend effort only on
-proven hot paths. All accepted source changes are guarded by
-`#if defined(__AVX2__)` so the generic / SSE / NEON paths are unchanged.
+proven hot paths. All accepted source changes take effect only on AVX2: the
+DSP kernels are guarded by `#if defined(__AVX2__)`, and the pre-existing SSE
+bodies are retained verbatim in the `#else` branches, so generic / SSE / NEON
+behavior is unchanged.
 
 ## Results (14-vector suite, PGO builds, geomean speedup vs upstream `-O2`)
 
 | variant                                   | mean ns/sample | speedup (geomean) |
 | ----------------------------------------- | -------------- | ----------------- |
 | upstream `-O2` (baseline)                 | 5.830          | —                 |
-| earlier exact build (before this session)| 3.997          | +47.7%            |
+| earlier exact build before this session (`unroll`) | 3.997 | +47.7% |
 | + packed stereo output stores (`c_store`) | 3.843          | +54.1%            |
-| + AVX2 SoA IMDCT36 (`d_imdct`, **exact**) | 3.492          | **+71.0%**        |
-| fast track `-ffast-math` (`d_fast`)       | 3.430          | **+74.5%**        |
+| + AVX2 SoA IMDCT36 (`exact`)              | 3.492          | **+71.0%**        |
+| fast track `-ffast-math` (`fast`)         | 3.430          | **+74.5%**        |
 
-Bit-exact track (`d_imdct`) is byte-identical to upstream on all 89 vectors,
+Bit-exact track (`exact`) is byte-identical to upstream on all 89 vectors,
 with and without PGO, and passes the full conformance suite. The fast track
 also passes conformance (PSNR/max_diff); the FMA advantage has shrunk to ~2%
 now that the FP-heavy loops are explicit 256-bit SIMD.
 
-Kernel-level (micro-benchmarks vs upstream): `mp3d_synth` +63%,
-`mp3d_DCT_II` +60%, `L3_imdct36` +156%, `L3_midside_stereo` +73%,
-`L3_antialias` +38%.
+Naming: the final bit-exact build is the one shipped as `results/exact.csv`
+(`summary.csv` row `exact`); the final fast build is row `fast`. The
+intermediate rows (`unroll`, `c_store`) are earlier stages kept for provenance.
+`results/README.md` maps every CSV to its generator and status.
 
-## Source changes in `src/minimp3.h` (all AVX2-gated)
+Kernel-level (micro-benchmarks vs upstream `-O2`, same machine; reproduce with
+`make kernels`, data in `results/kernels.csv`): `L3_imdct36` +75.6%,
+`L3_midside_stereo` +49.5%, `mp3d_DCT_II` +46.6%, `mp3d_synth` +40.2%,
+`L3_antialias` +34.7%. (An earlier session recorded larger deltas; the values
+above are the ones reproducible from the committed script and are what the docs
+quote.)
+
+## Source changes in `src/minimp3.h` (effective only on AVX2)
 
 1. `mp3d_DCT_II`: AVX2 8-wide transform for full 8-band groups, SSE tail.
 2. `mp3d_synth`: AVX2 processes two phases (i and i-1) per iteration. The
@@ -90,7 +100,8 @@ scripts/build_opt.sh exact      # or: fast
 - `harness/diff.sh [flags]` — builds `tools/decode_dump.c` against the pristine
   `upstream/` header (canonical `-O2 -std=c89`, the oracle) and `src/`, decodes
   all 89 vectors, and requires byte-identical PCM. Set `PGO_DIR=<dir>` to test
-  the PGO'd candidate.
+  the PGO'd candidate, and `ORACLE_FLAGS=...` to build a matching oracle (used
+  by `make verify-portable` for the `NO_SIMD`/`FLOAT_OUTPUT` checks).
 - `harness/conformance.sh <hdr_dir> [flags]` — builds upstream `minimp3_test.c`
   against a header dir and runs the full `scripts/test.sh` (PSNR/max_diff and
   mode checks).
@@ -98,26 +109,62 @@ scripts/build_opt.sh exact      # or: fast
   and writes `results/<name>.csv`. `TRAIN_SET=heldout` trains without the
   measured vectors for an out-of-sample estimate.
 - `harness/matrix.sh` — plain compiler matrix.
+- `harness/kernbench.sh` — per-kernel upstream-vs-AVX2 micro-benchmarks, writes
+  `results/kernels.csv`.
 - `bench/bench.c` — full-buffer decode throughput (ns/sample, TSC cycles/sample,
   min-of-K, `taskset` pinned).
 - `bench/kernbench.c` — per-kernel micro-benchmarks (`mp3d_DCT_II`,
   `mp3d_synth`, `L3_imdct36`, `L3_antialias`, `L3_midside_stereo`).
 
-Portability: SSE-only (`-march=x86-64-v2`), AVX2 (`-march=x86-64-v3`),
-`-DMINIMP3_NO_SIMD` and `-DMINIMP3_FLOAT_OUTPUT` all compile; the NO_SIMD path
-is untouched and its small divergence from SIMD is pre-existing in upstream.
-The float-output build was verified bit-exact against upstream.
+Portability: SSE-only (`-march=x86-64-v2`), AVX2 (`-march=x86-64-v3`,
+`-ffp-contract=off`), `-DMINIMP3_NO_SIMD` and `-DMINIMP3_FLOAT_OUTPUT` all
+compile and decode bit-identically to a matching upstream oracle (the NO_SIMD
+path is untouched; its small divergence from SIMD is pre-existing in upstream).
+The float-output build was verified bit-exact against upstream. AVX2 selection
+is compile-time only, so a `-march` build that enables AVX2 needs an AVX2 CPU
+(there is no runtime AVX2 dispatch).
+
+Sanitizers: `make sanitize` builds the AVX2 candidate with AddressSanitizer +
+UBSan and runs all 89 vectors, truncated prefixes of each, and 200 deterministic
+pseudo-random buffers (556 inputs). Clean — no memory or undefined-behavior
+reports, which also covers the `iscf[40]` bounds concern below.
+
+## Reproducing these claims
+
+```
+make verify            # 89/89 bit-exact (plain + PGO) + exact-build conformance
+make verify-portable   # SSE-only, AVX2, no-SIMD, float-output, -Werror C89
+make conformance-fast  # -ffast-math build conformance (PSNR/max_diff)
+make sanitize          # ASan + UBSan over vectors, truncations, random inputs
+make kernels           # per-kernel micro-benchmarks
+make bench             # end-to-end throughput -> results/exact.csv
+```
+
+Timings are machine-specific; the correctness results are not. Three fresh PGO
+rebuilds of the exact build spanned 3.46–3.51 ns/sample (1.3% overall,
+per-vector up to 4%; `results/variance.csv`), so treat the speedups as
+approximate. Last run on the committed source: plain and PGO `harness/diff.sh`
+both report `PASS: 89 vectors bit-exact`; the exact and `-ffast-math` builds
+both pass conformance; `make verify-portable` passes; and `make sanitize` is
+clean over 556 inputs. The one reproducible exception is by design:
+`-march=x86-64-v3` *without* `-ffp-contract=off` diverges on
+`noise_meandr.mp3` (FMA contraction), which is why the exact build always sets
+`-ffp-contract=off`.
 
 ## Known warning under PGO
 
 Building the candidate with `-fprofile-use` can emit
 `-Wstringop-overflow` in `L3_decode_scalefactors` (the `iscf[40]` writes at
-`src/minimp3.h:695-697`). That code is **unchanged from upstream**; the warning
-appears only because the added AVX2 code changes inlining/value-range analysis.
-It does not appear when building stock upstream through the same PGO pipeline,
-but it is a static-analysis artifact of the unchanged code path: all 89 vectors
-(including the `nonstandard` and `fuzz` cases) decode bit-identically, so it is
-not a miscompilation. `make verify` still passes.
+`src/minimp3.h:695-697`). The code is **unchanged from upstream**; the warning
+appears only because the added AVX2 code perturbs gcc's value-range analysis.
+It is a **false positive**, and this is provable from the values gcc cannot
+see: `n_long_sfb`/`n_short_sfb` are only ever set to long `(22,0)`, short
+`(0,39)` or mixed `(8,30)`/`(6,30)` (`src/minimp3.h:547-573`). The largest write
+index is therefore `n_long_sfb + i + 2` with `i <= n_short_sfb - 3`, i.e.
+`0 + 36 + 2 = 38` for short blocks and `8 + 27 + 2 = 37` for mixed — both below
+40. Consistent with this, ASan+UBSan over the 89 vectors, truncations and random
+inputs is clean (`make sanitize`), and all 89 decode bit-identically.
+`make verify` passes.
 
 ## Fork layout / commit structure
 
