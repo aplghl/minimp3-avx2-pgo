@@ -883,6 +883,15 @@ static void L3_midside_stereo(float *left, int n)
 #if HAVE_SIMD
     if (have_simd())
     {
+#if defined(__AVX2__)
+        for (; i < n - 7; i += 8)
+        {
+            __m256 vl = _mm256_loadu_ps(left + i);
+            __m256 vr = _mm256_loadu_ps(right + i);
+            _mm256_storeu_ps(left + i, _mm256_add_ps(vl, vr));
+            _mm256_storeu_ps(right + i, _mm256_sub_ps(vl, vr));
+        }
+#endif /* __AVX2__ */
         for (; i < n - 3; i += 4)
         {
             f4 vl = VLD(left + i);
@@ -1020,16 +1029,34 @@ static void L3_antialias(float *grbuf, int nbands)
     {
         int i = 0;
 #if HAVE_SIMD
-        if (have_simd()) for (; i < 8; i += 4)
+        if (have_simd())
         {
-            f4 vu = VLD(grbuf + 18 + i);
-            f4 vd = VLD(grbuf + 14 - i);
-            f4 vc0 = VLD(g_aa[0] + i);
-            f4 vc1 = VLD(g_aa[1] + i);
-            vd = VREV(vd);
-            VSTORE(grbuf + 18 + i, VSUB(VMUL(vu, vc0), VMUL(vd, vc1)));
-            vd = VADD(VMUL(vu, vc1), VMUL(vd, vc0));
-            VSTORE(grbuf + 14 - i, VREV(vd));
+#if defined(__AVX2__)
+            {
+                static const int32_t rev8[8] = { 7, 6, 5, 4, 3, 2, 1, 0 };
+                __m256i idx = _mm256_loadu_si256((const __m256i *)(const void *)rev8);
+                __m256 vu = _mm256_loadu_ps(grbuf + 18);
+                __m256 vd = _mm256_loadu_ps(grbuf + 10);
+                __m256 vc0 = _mm256_loadu_ps(g_aa[0]);
+                __m256 vc1 = _mm256_loadu_ps(g_aa[1]);
+                vd = _mm256_permutevar8x32_ps(vd, idx);
+                _mm256_storeu_ps(grbuf + 18, _mm256_sub_ps(_mm256_mul_ps(vu, vc0), _mm256_mul_ps(vd, vc1)));
+                vd = _mm256_add_ps(_mm256_mul_ps(vu, vc1), _mm256_mul_ps(vd, vc0));
+                _mm256_storeu_ps(grbuf + 10, _mm256_permutevar8x32_ps(vd, idx));
+            }
+            i = 8;
+#endif /* __AVX2__ */
+            for (; i < 8; i += 4)
+            {
+                f4 vu = VLD(grbuf + 18 + i);
+                f4 vd = VLD(grbuf + 14 - i);
+                f4 vc0 = VLD(g_aa[0] + i);
+                f4 vc1 = VLD(g_aa[1] + i);
+                vd = VREV(vd);
+                VSTORE(grbuf + 18 + i, VSUB(VMUL(vu, vc0), VMUL(vd, vc1)));
+                vd = VADD(VMUL(vu, vc1), VMUL(vd, vc0));
+                VSTORE(grbuf + 14 - i, VREV(vd));
+            }
         }
 #endif /* HAVE_SIMD */
 #ifndef MINIMP3_ONLY_SIMD
