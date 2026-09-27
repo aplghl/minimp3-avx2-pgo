@@ -1278,7 +1278,72 @@ static void mp3d_DCT_II(float *grbuf, int n)
     };
     int i, k = 0;
 #if HAVE_SIMD
-    if (have_simd()) for (; k < n; k += 4)
+    if (have_simd())
+    {
+#if defined(__AVX2__)
+#define VMUL256_S(x, s) _mm256_mul_ps(x, _mm256_set1_ps(s))
+        for (; k <= n - 8; k += 8)
+        {
+            __m256 t[4][8], *x;
+            float *y = grbuf + k;
+
+            for (x = t[0], i = 0; i < 8; i++, x++)
+            {
+                __m256 x0 = _mm256_loadu_ps(&y[i*18]);
+                __m256 x1 = _mm256_loadu_ps(&y[(15 - i)*18]);
+                __m256 x2 = _mm256_loadu_ps(&y[(16 + i)*18]);
+                __m256 x3 = _mm256_loadu_ps(&y[(31 - i)*18]);
+                __m256 t0 = _mm256_add_ps(x0, x3);
+                __m256 t1 = _mm256_add_ps(x1, x2);
+                __m256 t2 = VMUL256_S(_mm256_sub_ps(x1, x2), g_sec[3*i + 0]);
+                __m256 t3 = VMUL256_S(_mm256_sub_ps(x0, x3), g_sec[3*i + 1]);
+                x[0]  = _mm256_add_ps(t0, t1);
+                x[8]  = VMUL256_S(_mm256_sub_ps(t0, t1), g_sec[3*i + 2]);
+                x[16] = _mm256_add_ps(t3, t2);
+                x[24] = VMUL256_S(_mm256_sub_ps(t3, t2), g_sec[3*i + 2]);
+            }
+            for (x = t[0], i = 0; i < 4; i++, x += 8)
+            {
+                __m256 x0 = x[0], x1 = x[1], x2 = x[2], x3 = x[3], x4 = x[4], x5 = x[5], x6 = x[6], x7 = x[7], xt;
+                xt = _mm256_sub_ps(x0, x7); x0 = _mm256_add_ps(x0, x7);
+                x7 = _mm256_sub_ps(x1, x6); x1 = _mm256_add_ps(x1, x6);
+                x6 = _mm256_sub_ps(x2, x5); x2 = _mm256_add_ps(x2, x5);
+                x5 = _mm256_sub_ps(x3, x4); x3 = _mm256_add_ps(x3, x4);
+                x4 = _mm256_sub_ps(x0, x3); x0 = _mm256_add_ps(x0, x3);
+                x3 = _mm256_sub_ps(x1, x2); x1 = _mm256_add_ps(x1, x2);
+                x[0] = _mm256_add_ps(x0, x1);
+                x[4] = VMUL256_S(_mm256_sub_ps(x0, x1), 0.70710677f);
+                x5 = _mm256_add_ps(x5, x6);
+                x6 = VMUL256_S(_mm256_add_ps(x6, x7), 0.70710677f);
+                x7 = _mm256_add_ps(x7, xt);
+                x3 = VMUL256_S(_mm256_add_ps(x3, x4), 0.70710677f);
+                x5 = _mm256_sub_ps(x5, VMUL256_S(x7, 0.198912367f));
+                x7 = _mm256_add_ps(x7, VMUL256_S(x5, 0.382683432f));
+                x5 = _mm256_sub_ps(x5, VMUL256_S(x7, 0.198912367f));
+                x0 = _mm256_sub_ps(xt, x6); xt = _mm256_add_ps(xt, x6);
+                x[1] = VMUL256_S(_mm256_add_ps(xt, x7), 0.50979561f);
+                x[2] = VMUL256_S(_mm256_add_ps(x4, x3), 0.54119611f);
+                x[3] = VMUL256_S(_mm256_sub_ps(x0, x5), 0.60134488f);
+                x[5] = VMUL256_S(_mm256_add_ps(x0, x5), 0.89997619f);
+                x[6] = VMUL256_S(_mm256_sub_ps(x4, x3), 1.30656302f);
+                x[7] = VMUL256_S(_mm256_sub_ps(xt, x7), 2.56291556f);
+            }
+            for (i = 0; i < 7; i++, y += 4*18)
+            {
+                __m256 s = _mm256_add_ps(t[3][i], t[3][i + 1]);
+                _mm256_storeu_ps(&y[0*18], t[0][i]);
+                _mm256_storeu_ps(&y[1*18], _mm256_add_ps(t[2][i], s));
+                _mm256_storeu_ps(&y[2*18], _mm256_add_ps(t[1][i], t[1][i + 1]));
+                _mm256_storeu_ps(&y[3*18], _mm256_add_ps(t[2][1 + i], s));
+            }
+            _mm256_storeu_ps(&y[0*18], t[0][7]);
+            _mm256_storeu_ps(&y[1*18], _mm256_add_ps(t[2][7], t[3][7]));
+            _mm256_storeu_ps(&y[2*18], t[1][7]);
+            _mm256_storeu_ps(&y[3*18], t[3][7]);
+        }
+#undef VMUL256_S
+#endif /* __AVX2__ */
+    for (; k < n; k += 4)
     {
         f4 t[4][8], *x;
         float *y = grbuf + k;
@@ -1360,6 +1425,7 @@ static void mp3d_DCT_II(float *grbuf, int n)
             VSAVE4(2, t[1][7]);
             VSAVE4(3, t[3][7]);
         }
+    }
     } else
 #endif /* HAVE_SIMD */
 #ifdef MINIMP3_ONLY_SIMD
