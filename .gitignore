@@ -1,0 +1,17 @@
+# build artifacts
+/build/
+/pgo/
+*.o
+*.obj
+*.exe
+*.gcda
+*.gcno
+*.gcov
+gmon.out
+*.dSYM/
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

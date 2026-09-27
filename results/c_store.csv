@@ -1,0 +1,15 @@
+file,ns_per_sample
+vectors/l3-compl.bit,5.265
+vectors/l3-he_32khz.bit,3.677
+vectors/l3-he_44khz.bit,3.695
+vectors/l3-he_48khz.bit,3.693
+vectors/l3-hecommon.bit,2.484
+vectors/l3-he_free.bit,2.504
+vectors/l3-he_mode.bit,2.788
+vectors/l3-si.bit,3.918
+vectors/l3-si_block.bit,3.615
+vectors/l3-si_huff.bit,3.447
+vectors/l3-sin1k0db.bit,2.691
+vectors/performance/MEANDR_PHASE0.mp3,5.363
+vectors/performance/MIPSTest.mp3,5.353
+vectors/performance/noise_meandr.mp3,5.307

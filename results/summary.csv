@@ -1,0 +1,6 @@
+variant,mean_ns,geomean_speedup_vs_O2
+O2,5.8299,0.00
+unroll,3.9971,47.74
+c_store,3.8429,54.06
+d_imdct,3.4924,70.97
+d_fast,3.4300,74.48
