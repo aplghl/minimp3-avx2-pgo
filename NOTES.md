@@ -108,6 +108,30 @@ Portability: SSE-only (`-march=x86-64-v2`), AVX2 (`-march=x86-64-v3`),
 is untouched and its small divergence from SIMD is pre-existing in upstream.
 The float-output build was verified bit-exact against upstream.
 
+## Known warning under PGO
+
+Building the candidate with `-fprofile-use` can emit
+`-Wstringop-overflow` in `L3_decode_scalefactors` (the `iscf[40]` writes at
+`src/minimp3.h:695-697`). That code is **unchanged from upstream**; the warning
+appears only because the added AVX2 code changes inlining/value-range analysis.
+It does not appear when building stock upstream through the same PGO pipeline,
+but it is a static-analysis artifact of the unchanged code path: all 89 vectors
+(including the `nonstandard` and `fuzz` cases) decode bit-identically, so it is
+not a miscompilation. `make verify` still passes.
+
+## Fork layout / commit structure
+
+Commits on top of upstream `ea99364`:
+
+1. scaffold (harness, benchmarks, PGO recipe, docs)
+2. `mp3d_DCT_II` AVX2
+3. `mp3d_synth` AVX2 + packed stereo stores
+4. `L3_antialias` / `L3_midside_stereo` AVX2
+5. `L3_imdct36` SoA
+
+Each was verified bit-exact (`harness/diff.sh`) before committing.
+`OUTREACH.md` holds the (unposted) upstream issue/PR drafts.
+
 ## Remaining headroom (not taken)
 
 - `L3_huffman` is now the top cost on high-bitrate streams (~60% on some
