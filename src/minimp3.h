@@ -1581,81 +1581,212 @@ static void mp3d_synth(float *xl, mp3d_sample_t *dstl, int nch, float *lins)
     mp3d_synth_pair(dstl + 32*nch, nch, lins + 4*15 + 64);
 
 #if HAVE_SIMD
-    if (have_simd()) for (i = 14; i >= 0; i--)
+    if (have_simd())
     {
 #define VLOAD(k) f4 w0 = VSET(*w++); f4 w1 = VSET(*w++); f4 vz = VLD(&zlin[4*i - 64*k]); f4 vy = VLD(&zlin[4*i - 64*(15 - k)]);
 #define V0(k) { VLOAD(k) b =         VADD(VMUL(vz, w1), VMUL(vy, w0)) ; a =         VSUB(VMUL(vz, w0), VMUL(vy, w1));  }
 #define V1(k) { VLOAD(k) b = VADD(b, VADD(VMUL(vz, w1), VMUL(vy, w0))); a = VADD(a, VSUB(VMUL(vz, w0), VMUL(vy, w1))); }
 #define V2(k) { VLOAD(k) b = VADD(b, VADD(VMUL(vz, w1), VMUL(vy, w0))); a = VADD(a, VSUB(VMUL(vy, w1), VMUL(vz, w0))); }
-        f4 a, b;
-        zlin[4*i]     = xl[18*(31 - i)];
-        zlin[4*i + 1] = xr[18*(31 - i)];
-        zlin[4*i + 2] = xl[1 + 18*(31 - i)];
-        zlin[4*i + 3] = xr[1 + 18*(31 - i)];
-        zlin[4*i + 64] = xl[1 + 18*(1 + i)];
-        zlin[4*i + 64 + 1] = xr[1 + 18*(1 + i)];
-        zlin[4*i - 64 + 2] = xl[18*(1 + i)];
-        zlin[4*i - 64 + 3] = xr[18*(1 + i)];
 
-        V0(0) V2(1) V1(2) V2(3) V1(4) V2(5) V1(6) V2(7)
+#if HAVE_SSE
+#ifndef MINIMP3_FLOAT_OUTPUT
+#define SYNTH_STORE(ii, av, bv) do { \
+            static const f4 g_max = { 32767.0f, 32767.0f, 32767.0f, 32767.0f }; \
+            static const f4 g_min = { -32768.0f, -32768.0f, -32768.0f, -32768.0f }; \
+            __m128i pcm8 = _mm_packs_epi32(_mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(av, g_max), g_min)), \
+                                           _mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(bv, g_max), g_min))); \
+            if (nch == 2) \
+            { \
+                _mm_storeu_si32((void *)(dstl + (15 - (ii))*2), pcm8); \
+                _mm_storeu_si32((void *)(dstl + (47 - (ii))*2), _mm_srli_si128(pcm8, 4)); \
+                _mm_storeu_si32((void *)(dstl + (17 + (ii))*2), _mm_srli_si128(pcm8, 8)); \
+                _mm_storeu_si32((void *)(dstl + (49 + (ii))*2), _mm_srli_si128(pcm8, 12)); \
+            } else \
+            { \
+                dstl[(15 - (ii))] = _mm_extract_epi16(pcm8, 0); \
+                dstl[(47 - (ii))] = _mm_extract_epi16(pcm8, 2); \
+                dstl[(17 + (ii))] = _mm_extract_epi16(pcm8, 4); \
+                dstl[(49 + (ii))] = _mm_extract_epi16(pcm8, 6); \
+            } \
+        } while (0)
+#else /* MINIMP3_FLOAT_OUTPUT */
+#define SYNTH_STORE(ii, av, bv) do { \
+            static const f4 g_scale = { 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f }; \
+            f4 as = VMUL(av, g_scale); \
+            f4 bs = VMUL(bv, g_scale); \
+            _mm_store_ss(dstr + (15 - (ii))*nch, _mm_shuffle_ps(as, as, _MM_SHUFFLE(1, 1, 1, 1))); \
+            _mm_store_ss(dstr + (17 + (ii))*nch, _mm_shuffle_ps(bs, bs, _MM_SHUFFLE(1, 1, 1, 1))); \
+            _mm_store_ss(dstl + (15 - (ii))*nch, _mm_shuffle_ps(as, as, _MM_SHUFFLE(0, 0, 0, 0))); \
+            _mm_store_ss(dstl + (17 + (ii))*nch, _mm_shuffle_ps(bs, bs, _MM_SHUFFLE(0, 0, 0, 0))); \
+            _mm_store_ss(dstr + (47 - (ii))*nch, _mm_shuffle_ps(as, as, _MM_SHUFFLE(3, 3, 3, 3))); \
+            _mm_store_ss(dstr + (49 + (ii))*nch, _mm_shuffle_ps(bs, bs, _MM_SHUFFLE(3, 3, 3, 3))); \
+            _mm_store_ss(dstl + (47 - (ii))*nch, _mm_shuffle_ps(as, as, _MM_SHUFFLE(2, 2, 2, 2))); \
+            _mm_store_ss(dstl + (49 + (ii))*nch, _mm_shuffle_ps(bs, bs, _MM_SHUFFLE(2, 2, 2, 2))); \
+        } while (0)
+#endif /* MINIMP3_FLOAT_OUTPUT */
+#endif /* HAVE_SSE */
 
+#if defined(__AVX2__)
+        /* Two phases (i and i-1) per iteration with 256-bit SIMD. The 4-float
+         * zlin groups of adjacent phases are adjacent in memory, so a single
+         * 8-float load covers both; low 128 lanes = phase i-1, high = phase i.
+         * Per-lane arithmetic order matches the SSE path exactly. */
+#define ZWRITE(j) \
+        zlin[4*(j)]     = xl[18*(31 - (j))]; \
+        zlin[4*(j) + 1] = xr[18*(31 - (j))]; \
+        zlin[4*(j) + 2] = xl[1 + 18*(31 - (j))]; \
+        zlin[4*(j) + 3] = xr[1 + 18*(31 - (j))]; \
+        zlin[4*(j) + 64] = xl[1 + 18*(1 + (j))]; \
+        zlin[4*(j) + 64 + 1] = xr[1 + 18*(1 + (j))]; \
+        zlin[4*(j) - 64 + 2] = xl[18*(1 + (j))]; \
+        zlin[4*(j) - 64 + 3] = xr[18*(1 + (j))];
+#define PVZ(k) _mm256_loadu_ps(&zlin[4*(i - 1) - 64*(k)])
+#define PVY(k) _mm256_loadu_ps(&zlin[4*(i - 1) - 64*(15 - (k))])
+#define PW0(k) _mm256_set_m128(_mm_set1_ps(wi[2*(k)]),     _mm_set1_ps(wj[2*(k)]))
+#define PW1(k) _mm256_set_m128(_mm_set1_ps(wi[2*(k) + 1]), _mm_set1_ps(wj[2*(k) + 1]))
+
+        for (i = 14; i >= 1; i -= 2)
         {
+            const float *wi = w;
+            const float *wj = w + 16;
+            __m256 a, b;
+
+            ZWRITE(i)
+            ZWRITE(i - 1)
+
+            {
+                __m256 w0 = PW0(0), w1 = PW1(0), vz = PVZ(0), vy = PVY(0);
+                b = _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0));
+                a = _mm256_sub_ps(_mm256_mul_ps(vz, w0), _mm256_mul_ps(vy, w1));
+            }
+            {
+                __m256 w0 = PW0(1), w1 = PW1(1), vz = PVZ(1), vy = PVY(1);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vy, w1), _mm256_mul_ps(vz, w0)));
+            }
+            {
+                __m256 w0 = PW0(2), w1 = PW1(2), vz = PVZ(2), vy = PVY(2);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vz, w0), _mm256_mul_ps(vy, w1)));
+            }
+            {
+                __m256 w0 = PW0(3), w1 = PW1(3), vz = PVZ(3), vy = PVY(3);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vy, w1), _mm256_mul_ps(vz, w0)));
+            }
+            {
+                __m256 w0 = PW0(4), w1 = PW1(4), vz = PVZ(4), vy = PVY(4);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vz, w0), _mm256_mul_ps(vy, w1)));
+            }
+            {
+                __m256 w0 = PW0(5), w1 = PW1(5), vz = PVZ(5), vy = PVY(5);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vy, w1), _mm256_mul_ps(vz, w0)));
+            }
+            {
+                __m256 w0 = PW0(6), w1 = PW1(6), vz = PVZ(6), vy = PVY(6);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vz, w0), _mm256_mul_ps(vy, w1)));
+            }
+            {
+                __m256 w0 = PW0(7), w1 = PW1(7), vz = PVZ(7), vy = PVY(7);
+                b = _mm256_add_ps(b, _mm256_add_ps(_mm256_mul_ps(vz, w1), _mm256_mul_ps(vy, w0)));
+                a = _mm256_add_ps(a, _mm256_sub_ps(_mm256_mul_ps(vy, w1), _mm256_mul_ps(vz, w0)));
+            }
+
+            SYNTH_STORE(i, _mm256_extractf128_ps(a, 1), _mm256_extractf128_ps(b, 1));
+            SYNTH_STORE(i - 1, _mm256_castps256_ps128(a), _mm256_castps256_ps128(b));
+            w += 32;
+        }
+#undef PVZ
+#undef PVY
+#undef PW0
+#undef PW1
+
+        /* leftover phase i == 0 */
+        {
+            f4 a, b;
+            ZWRITE(0)
+            V0(0) V2(1) V1(2) V2(3) V1(4) V2(5) V1(6) V2(7)
+            SYNTH_STORE(0, a, b);
+        }
+#undef ZWRITE
+#else /* __AVX2__ */
+        for (i = 14; i >= 0; i--)
+        {
+            f4 a, b;
+            zlin[4*i]     = xl[18*(31 - i)];
+            zlin[4*i + 1] = xr[18*(31 - i)];
+            zlin[4*i + 2] = xl[1 + 18*(31 - i)];
+            zlin[4*i + 3] = xr[1 + 18*(31 - i)];
+            zlin[4*i + 64] = xl[1 + 18*(1 + i)];
+            zlin[4*i + 64 + 1] = xr[1 + 18*(1 + i)];
+            zlin[4*i - 64 + 2] = xl[18*(1 + i)];
+            zlin[4*i - 64 + 3] = xr[18*(1 + i)];
+
+            V0(0) V2(1) V1(2) V2(3) V1(4) V2(5) V1(6) V2(7)
+
+            {
 #ifndef MINIMP3_FLOAT_OUTPUT
 #if HAVE_SSE
-            static const f4 g_max = { 32767.0f, 32767.0f, 32767.0f, 32767.0f };
-            static const f4 g_min = { -32768.0f, -32768.0f, -32768.0f, -32768.0f };
-            __m128i pcm8 = _mm_packs_epi32(_mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(a, g_max), g_min)),
-                                           _mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(b, g_max), g_min)));
-            dstr[(15 - i)*nch] = _mm_extract_epi16(pcm8, 1);
-            dstr[(17 + i)*nch] = _mm_extract_epi16(pcm8, 5);
-            dstl[(15 - i)*nch] = _mm_extract_epi16(pcm8, 0);
-            dstl[(17 + i)*nch] = _mm_extract_epi16(pcm8, 4);
-            dstr[(47 - i)*nch] = _mm_extract_epi16(pcm8, 3);
-            dstr[(49 + i)*nch] = _mm_extract_epi16(pcm8, 7);
-            dstl[(47 - i)*nch] = _mm_extract_epi16(pcm8, 2);
-            dstl[(49 + i)*nch] = _mm_extract_epi16(pcm8, 6);
+                static const f4 g_max = { 32767.0f, 32767.0f, 32767.0f, 32767.0f };
+                static const f4 g_min = { -32768.0f, -32768.0f, -32768.0f, -32768.0f };
+                __m128i pcm8 = _mm_packs_epi32(_mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(a, g_max), g_min)),
+                                               _mm_cvtps_epi32(_mm_max_ps(_mm_min_ps(b, g_max), g_min)));
+                dstr[(15 - i)*nch] = _mm_extract_epi16(pcm8, 1);
+                dstr[(17 + i)*nch] = _mm_extract_epi16(pcm8, 5);
+                dstl[(15 - i)*nch] = _mm_extract_epi16(pcm8, 0);
+                dstl[(17 + i)*nch] = _mm_extract_epi16(pcm8, 4);
+                dstr[(47 - i)*nch] = _mm_extract_epi16(pcm8, 3);
+                dstr[(49 + i)*nch] = _mm_extract_epi16(pcm8, 7);
+                dstl[(47 - i)*nch] = _mm_extract_epi16(pcm8, 2);
+                dstl[(49 + i)*nch] = _mm_extract_epi16(pcm8, 6);
 #else /* HAVE_SSE */
-            int16x4_t pcma, pcmb;
-            a = VADD(a, VSET(0.5f));
-            b = VADD(b, VSET(0.5f));
-            pcma = vqmovn_s32(vqaddq_s32(vcvtq_s32_f32(a), vreinterpretq_s32_u32(vcltq_f32(a, VSET(0)))));
-            pcmb = vqmovn_s32(vqaddq_s32(vcvtq_s32_f32(b), vreinterpretq_s32_u32(vcltq_f32(b, VSET(0)))));
-            vst1_lane_s16(dstr + (15 - i)*nch, pcma, 1);
-            vst1_lane_s16(dstr + (17 + i)*nch, pcmb, 1);
-            vst1_lane_s16(dstl + (15 - i)*nch, pcma, 0);
-            vst1_lane_s16(dstl + (17 + i)*nch, pcmb, 0);
-            vst1_lane_s16(dstr + (47 - i)*nch, pcma, 3);
-            vst1_lane_s16(dstr + (49 + i)*nch, pcmb, 3);
-            vst1_lane_s16(dstl + (47 - i)*nch, pcma, 2);
-            vst1_lane_s16(dstl + (49 + i)*nch, pcmb, 2);
+                int16x4_t pcma, pcmb;
+                a = VADD(a, VSET(0.5f));
+                b = VADD(b, VSET(0.5f));
+                pcma = vqmovn_s32(vqaddq_s32(vcvtq_s32_f32(a), vreinterpretq_s32_u32(vcltq_f32(a, VSET(0)))));
+                pcmb = vqmovn_s32(vqaddq_s32(vcvtq_s32_f32(b), vreinterpretq_s32_u32(vcltq_f32(b, VSET(0)))));
+                vst1_lane_s16(dstr + (15 - i)*nch, pcma, 1);
+                vst1_lane_s16(dstr + (17 + i)*nch, pcmb, 1);
+                vst1_lane_s16(dstl + (15 - i)*nch, pcma, 0);
+                vst1_lane_s16(dstl + (17 + i)*nch, pcmb, 0);
+                vst1_lane_s16(dstr + (47 - i)*nch, pcma, 3);
+                vst1_lane_s16(dstr + (49 + i)*nch, pcmb, 3);
+                vst1_lane_s16(dstl + (47 - i)*nch, pcma, 2);
+                vst1_lane_s16(dstl + (49 + i)*nch, pcmb, 2);
 #endif /* HAVE_SSE */
 
 #else /* MINIMP3_FLOAT_OUTPUT */
 
-            static const f4 g_scale = { 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f };
-            a = VMUL(a, g_scale);
-            b = VMUL(b, g_scale);
+                static const f4 g_scale = { 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f, 1.0f/32768.0f };
+                a = VMUL(a, g_scale);
+                b = VMUL(b, g_scale);
 #if HAVE_SSE
-            _mm_store_ss(dstr + (15 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(1, 1, 1, 1)));
-            _mm_store_ss(dstr + (17 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(1, 1, 1, 1)));
-            _mm_store_ss(dstl + (15 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(0, 0, 0, 0)));
-            _mm_store_ss(dstl + (17 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(0, 0, 0, 0)));
-            _mm_store_ss(dstr + (47 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)));
-            _mm_store_ss(dstr + (49 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)));
-            _mm_store_ss(dstl + (47 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(2, 2, 2, 2)));
-            _mm_store_ss(dstl + (49 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(2, 2, 2, 2)));
+                _mm_store_ss(dstr + (15 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(1, 1, 1, 1)));
+                _mm_store_ss(dstr + (17 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(1, 1, 1, 1)));
+                _mm_store_ss(dstl + (15 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(0, 0, 0, 0)));
+                _mm_store_ss(dstl + (17 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(0, 0, 0, 0)));
+                _mm_store_ss(dstr + (47 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)));
+                _mm_store_ss(dstr + (49 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)));
+                _mm_store_ss(dstl + (47 - i)*nch, _mm_shuffle_ps(a, a, _MM_SHUFFLE(2, 2, 2, 2)));
+                _mm_store_ss(dstl + (49 + i)*nch, _mm_shuffle_ps(b, b, _MM_SHUFFLE(2, 2, 2, 2)));
 #else /* HAVE_SSE */
-            vst1q_lane_f32(dstr + (15 - i)*nch, a, 1);
-            vst1q_lane_f32(dstr + (17 + i)*nch, b, 1);
-            vst1q_lane_f32(dstl + (15 - i)*nch, a, 0);
-            vst1q_lane_f32(dstl + (17 + i)*nch, b, 0);
-            vst1q_lane_f32(dstr + (47 - i)*nch, a, 3);
-            vst1q_lane_f32(dstr + (49 + i)*nch, b, 3);
-            vst1q_lane_f32(dstl + (47 - i)*nch, a, 2);
-            vst1q_lane_f32(dstl + (49 + i)*nch, b, 2);
+                vst1q_lane_f32(dstr + (15 - i)*nch, a, 1);
+                vst1q_lane_f32(dstr + (17 + i)*nch, b, 1);
+                vst1q_lane_f32(dstl + (15 - i)*nch, a, 0);
+                vst1q_lane_f32(dstl + (17 + i)*nch, b, 0);
+                vst1q_lane_f32(dstr + (47 - i)*nch, a, 3);
+                vst1q_lane_f32(dstr + (49 + i)*nch, b, 3);
+                vst1q_lane_f32(dstl + (47 - i)*nch, a, 2);
+                vst1q_lane_f32(dstl + (49 + i)*nch, b, 2);
 #endif /* HAVE_SSE */
 #endif /* MINIMP3_FLOAT_OUTPUT */
+            }
         }
+#endif /* __AVX2__ */
+#undef SYNTH_STORE
     } else
 #endif /* HAVE_SIMD */
 #ifdef MINIMP3_ONLY_SIMD
