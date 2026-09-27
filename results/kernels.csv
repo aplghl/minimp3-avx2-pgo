@@ -1,0 +1,6 @@
+kernel,upstream_ns,avx2_ns,speedup_pct
+dct2,128.14,68.41,46.6
+synth,214.35,128.10,40.2
+antialias,36.82,24.05,34.7
+midside,56.24,28.39,49.5
+imdct36,472.05,115.28,75.6

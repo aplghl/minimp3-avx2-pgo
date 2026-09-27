@@ -1,6 +1,6 @@
-variant,mean_ns,geomean_speedup_vs_O2
-O2,5.8299,0.00
-unroll,3.9971,47.74
-c_store,3.8429,54.06
-d_imdct,3.4924,70.97
-d_fast,3.4300,74.48
+variant,mean_ns,geomean_speedup_vs_O2,note
+upstream-O2,5.8299,0.00,baseline
+unroll,3.9971,47.74,earlier exact build (unroll.csv)
+c_store,3.8429,54.06,exact + packed stereo stores (c_store.csv)
+exact,3.4924,70.97,canonical exact.csv (AVX2 + PGO bit-exact)
+fast,3.4300,74.48,canonical fast.csv (-ffast-math + PGO)

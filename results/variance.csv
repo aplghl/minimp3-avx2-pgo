@@ -1,0 +1,16 @@
+file,min_ns,mean_ns,max_ns,spread_pct
+vectors/l3-compl.bit,4.721,4.830,4.927,4.3
+vectors/l3-he_32khz.bit,3.255,3.294,3.331,2.3
+vectors/l3-he_44khz.bit,3.285,3.315,3.338,1.6
+vectors/l3-he_48khz.bit,3.289,3.320,3.347,1.7
+vectors/l3-hecommon.bit,2.109,2.128,2.152,2.0
+vectors/l3-he_free.bit,2.121,2.129,2.142,1.0
+vectors/l3-he_mode.bit,2.538,2.546,2.553,0.6
+vectors/l3-si.bit,3.536,3.552,3.567,0.9
+vectors/l3-si_block.bit,3.232,3.309,3.354,3.7
+vectors/l3-si_huff.bit,2.966,3.050,3.099,4.4
+vectors/l3-sin1k0db.bit,2.237,2.286,2.322,3.7
+vectors/performance/MEANDR_PHASE0.mp3,4.867,4.974,5.049,3.7
+vectors/performance/MIPSTest.mp3,4.880,4.966,5.025,2.9
+vectors/performance/noise_meandr.mp3,4.949,5.065,5.133,3.6
+RUN_MEAN,3.463,3.483,3.508,1.3
