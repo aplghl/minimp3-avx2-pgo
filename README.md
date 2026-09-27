@@ -39,7 +39,7 @@ Kernel-level speedups (vs upstream `-O2`, same machine): `L3_imdct36` +76%,
 ## Quickstart
 
 ```
-git clone --recursive <this repo>     # or: git submodule update --init
+git clone --recursive https://github.com/aplghl/minimp3-avx2-pgo.git     # or: git submodule update --init
 make verify          # bit-exact (89 vectors, plain + PGO) + conformance
 make verify-portable # SSE-only / AVX2 / no-SIMD / float-output / -Werror
 make bench           # PGO build + throughput -> results/exact.csv
@@ -138,7 +138,7 @@ caught. Set `ORACLE_FLAGS` to build a matching oracle (e.g. for `NO_SIMD` or
 `upstream/` is a git submodule used as the pristine oracle:
 
 ```
-git clone --recursive <this repo>
+git clone --recursive https://github.com/aplghl/minimp3-avx2-pgo.git
 # or, after a normal clone:
 git submodule update --init
 ```
@@ -179,7 +179,6 @@ scripts/    PGO build helper
 results/    benchmark CSVs + results/README.md (what each file is)
 .github/    CI: portable correctness (make verify-portable)
 NOTES.md    method, full results, rejected experiments
-OUTREACH.md upstream issue/PR drafts (local only, not posted)
 upstream/   pristine lieff/minimp3 submodule (oracle)
 ```
 

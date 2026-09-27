@@ -177,7 +177,6 @@ Commits on top of upstream `ea99364`:
 5. `L3_imdct36` SoA
 
 Each was verified bit-exact (`harness/diff.sh`) before committing.
-`OUTREACH.md` holds the (unposted) upstream issue/PR drafts.
 
 ## Remaining headroom (not taken)
 
