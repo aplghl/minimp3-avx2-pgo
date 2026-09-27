@@ -20,7 +20,8 @@ mkdir -p "$BUILD"
 CC=${CC:-gcc}
 CAND_FLAGS=${CAND_FLAGS:-"-O2 -std=gnu11"}
 [ $# -gt 0 ] && CAND_FLAGS="$*"
-ORACLE_FLAGS="-O2 -std=c89"
+# Override to build a matching oracle (e.g. ORACLE_FLAGS="-O2 -std=c89 -DMINIMP3_NO_SIMD").
+ORACLE_FLAGS=${ORACLE_FLAGS:-"-O2 -std=c89"}
 PGO_DIR=${PGO_DIR:-}
 
 TRAIN=(

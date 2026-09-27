@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Toolchain
+        run: |
+          gcc --version
+          uname -m
+      - name: Portable correctness (SSE / AVX2 / no-SIMD / float / -Werror)
+        run: make verify-portable
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ASan + UBSan over vectors, truncations and random inputs
+        run: make sanitize
+
+  clang:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Portable correctness with clang
+        run: make CC=clang verify-portable

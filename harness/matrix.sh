@@ -52,6 +52,7 @@ for v in "${VARIANTS[@]}"; do
         f="$ROOT/upstream/$rel"
         [ -e "$f" ] || continue
         line=$(taskset -c "$PIN" "$bin" "$f" "$BUDGET" "$REPEATS")
+        line=${line//$ROOT\//}
         echo "$name,$line" | tee -a "$CSV"
     done
 done
